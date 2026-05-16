@@ -50,11 +50,18 @@ unzip -q -o data/jpx/jpx-tokyo-stock-exchange-prediction.zip -d data/jpx
 ## 当前最好提交
 
 - Kaggle kernel：`caixin030703/jpx-local-baseline-submit`
-- Kernel version：`8`
-- Submission ref：`52710807`
-- Public score：`0.108`
-- Private score：`0.108`
-- 主要改进：线上提交脚本加入 1/2/5/10/20 日收益率、滚动收益均值、滚动波动率、调整后收盘价和成交量比等时间序列特征。
+- Kernel version：`16`
+- Submission ref：`52712546`
+- Public score：`0.214`
+- Private score：`0.214`
+- 主要改进：线上提交脚本切换为极简 LightGBM 排序信号，只使用调整后收盘价的一日差分 `close_diff1` 预测 `Target`，再按每日预测值生成排名。
+
+已验证过的主要线上版本：
+
+- v9：滚动时间序列特征 + sklearn 逆向 ensemble，`0.130 / 0.130`。
+- v13：多随机种子的浅层 LightGBM 差分 ensemble，`0.157 / 0.157`。
+- v14：alpha-tail LightGBM，只训练每日收益两端股票，`0.165 / 0.165`。
+- v16：单特征 `close_diff1` LightGBM，`0.214 / 0.214`。
 
 输出文件：
 

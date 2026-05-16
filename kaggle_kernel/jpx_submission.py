@@ -5,11 +5,18 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
+try:
+    import lightgbm as lgb
+except Exception:
+    lgb = None
 
 INPUT_ROOT = Path("../input")
 RANDOM_STATE = 42
 MAX_TRAIN_ROWS = 900_000
 HISTORY_TAIL_DAYS = 45
+ROLLING_WEIGHT = 1.5
+CLOSE_DIFF_FEATURE_COLUMNS = ["close_diff1"]
+CLOSE_DIFF_HISTORY_DAYS = 100
 
 
 def read_stock_list(path):
@@ -182,17 +189,79 @@ def make_features(prices, stock_list):
     return features
 
 
-def make_model():
+SIMPLE_FEATURE_COLUMNS = [
+    "SecuritiesCode",
+    "Open",
+    "High",
+    "Low",
+    "Close",
+    "Volume",
+    "AdjustmentFactor",
+    "ExpectedDividend",
+    "SupervisionFlag",
+    "dividend_flag",
+    "dayofweek",
+    "month",
+    "high_low_spread",
+    "close_open_return",
+    "33SectorCode",
+    "17SectorCode",
+    "NewIndexSeriesSizeCode",
+    "market_cap_log",
+    "issued_shares_log",
+    "Universe0",
+]
+
+
+def make_simple_features(prices, stock_list):
+    df = prices.copy()
+    df["Date"] = pd.to_datetime(df["Date"])
+    df["SecuritiesCode"] = df["SecuritiesCode"].astype("int32")
+    df = df.merge(stock_list, on="SecuritiesCode", how="left")
+    for col in ["Open", "High", "Low", "Close", "Volume", "AdjustmentFactor", "ExpectedDividend"]:
+        if col not in df.columns:
+            df[col] = np.nan
+    if "SupervisionFlag" not in df.columns:
+        df["SupervisionFlag"] = False
+    df["ExpectedDividend"] = df["ExpectedDividend"].fillna(0.0)
+    df["SupervisionFlag"] = df["SupervisionFlag"].fillna(False).astype("int8")
+    df["AdjustmentFactor"] = df["AdjustmentFactor"].fillna(1.0)
+    df["dividend_flag"] = (df["ExpectedDividend"] != 0).astype("int8")
+    df["dayofweek"] = df["Date"].dt.dayofweek.astype("int8")
+    df["month"] = df["Date"].dt.month.astype("int8")
+    df["high_low_spread"] = (df["High"] - df["Low"]) / df["Close"]
+    df["close_open_return"] = (df["Close"] - df["Open"]) / df["Open"]
+    df["market_cap_log"] = np.log1p(df["MarketCapitalization"])
+    df["issued_shares_log"] = np.log1p(df["IssuedShares"])
+    df[SIMPLE_FEATURE_COLUMNS] = df[SIMPLE_FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan)
+    return df
+
+
+def make_model(n_estimators=260, learning_rate=0.05, num_leaves=63, random_state=RANDOM_STATE):
+    if lgb is not None:
+        return lgb.LGBMRegressor(
+            objective="regression",
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            num_leaves=num_leaves,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            reg_alpha=0.05,
+            reg_lambda=1.0,
+            random_state=random_state,
+            n_jobs=-1,
+            verbose=-1,
+        )
     return HistGradientBoostingRegressor(
         loss="squared_error",
-        learning_rate=0.05,
-        max_iter=260,
+        learning_rate=learning_rate,
+        max_iter=n_estimators,
         max_leaf_nodes=63,
         l2_regularization=0.02,
         early_stopping=True,
         validation_fraction=0.1,
         n_iter_no_change=30,
-        random_state=RANDOM_STATE,
+        random_state=random_state,
     )
 
 
@@ -212,24 +281,58 @@ def tail_by_code(prices, n=HISTORY_TAIL_DAYS):
     return prices.sort_values(["SecuritiesCode", "Date"]).groupby("SecuritiesCode", sort=False).tail(n)
 
 
+def make_close_diff_features(prices):
+    df = add_adjusted_close(prices)
+    df = df.sort_values(["SecuritiesCode", "Date"]).copy()
+    df["close_diff1"] = df.groupby("SecuritiesCode", sort=False)["AdjustedClose"].diff(1)
+    df[CLOSE_DIFF_FEATURE_COLUMNS] = df[CLOSE_DIFF_FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return df
+
+
 DATA_ROOT = find_data_root()
 print("Using data root:", DATA_ROOT)
 prepare_competition_api(DATA_ROOT)
 
 stock_list = read_stock_list(DATA_ROOT / "stock_list.csv")
 all_prices = load_all_prices(DATA_ROOT)
-training_prices = all_prices.dropna(subset=["Target"]).copy()
-training_prices = training_prices.loc[training_prices["Date"] >= "2019-01-01"].copy()
-training_features = make_features(training_prices, stock_list).dropna(subset=["Target"]).copy()
-if len(training_features) > MAX_TRAIN_ROWS:
-    training_features = training_features.sample(MAX_TRAIN_ROWS, random_state=RANDOM_STATE).sort_values(
-        ["Date", "SecuritiesCode"]
+labeled_prices = all_prices.dropna(subset=["Target"]).copy()
+
+if lgb is not None:
+    training_prices = labeled_prices.loc[labeled_prices["Date"] <= "2019-12-31"].copy()
+    close_diff_training_features = make_close_diff_features(training_prices).dropna(subset=["Target"]).copy()
+    close_diff_model = lgb.LGBMRegressor(seed=RANDOM_STATE, n_jobs=-1, verbose=-1)
+    close_diff_model.fit(
+        close_diff_training_features[CLOSE_DIFF_FEATURE_COLUMNS],
+        close_diff_training_features["Target"],
     )
+    model = None
+    simple_model = None
+else:
+    training_prices = labeled_prices.loc[labeled_prices["Date"] >= "2019-01-01"].copy()
+    training_features = make_features(training_prices, stock_list).dropna(subset=["Target"]).copy()
+    if len(training_features) > MAX_TRAIN_ROWS:
+        training_features = training_features.sample(MAX_TRAIN_ROWS, random_state=RANDOM_STATE).sort_values(
+            ["Date", "SecuritiesCode"]
+        )
+    model = make_model()
+    model.fit(training_features[FEATURE_COLUMNS], training_features["Target"])
 
-model = make_model()
-model.fit(training_features[FEATURE_COLUMNS], training_features["Target"])
+    simple_training_features = make_simple_features(training_prices, stock_list).dropna(subset=["Target"]).copy()
+    if len(simple_training_features) > MAX_TRAIN_ROWS:
+        simple_training_features = simple_training_features.sample(
+            MAX_TRAIN_ROWS, random_state=RANDOM_STATE
+        ).sort_values(["Date", "SecuritiesCode"])
+    simple_model = make_model()
+    simple_model.fit(simple_training_features[SIMPLE_FEATURE_COLUMNS], simple_training_features["Target"])
 
-history_tail = tail_by_code(all_prices.drop(columns=["Target"]))
+if lgb is not None:
+    close_diff_history = tail_by_code(
+        all_prices[["Date", "SecuritiesCode", "Close", "AdjustmentFactor"]].drop_duplicates(["Date", "SecuritiesCode"]),
+        n=CLOSE_DIFF_HISTORY_DAYS,
+    )
+    first_close_diff_batch = True
+else:
+    history_tail = tail_by_code(all_prices.drop(columns=["Target"]))
 
 import jpx_tokyo_market_prediction
 
@@ -240,10 +343,26 @@ for prices, options, financials, trades, secondary_prices, sample_prediction in 
     prices = prices.copy()
     prices["Date"] = pd.to_datetime(prices["Date"])
     prediction_dates = set(prices["Date"].unique())
-    feature_source = pd.concat([history_tail, prices], ignore_index=True, sort=False)
-    test_features = make_features(feature_source, stock_list)
-    test_features = test_features.loc[test_features["Date"].isin(prediction_dates)].copy()
-    predictions = model.predict(test_features[FEATURE_COLUMNS])
-    prediction_frame = rank_predictions(sample_prediction, predictions)
-    env.predict(prediction_frame)
-    history_tail = tail_by_code(pd.concat([history_tail, prices], ignore_index=True, sort=False))
+    if lgb is not None:
+        price_tail = prices[["Date", "SecuritiesCode", "Close", "AdjustmentFactor"]].copy()
+        if first_close_diff_batch:
+            close_diff_history = close_diff_history.loc[close_diff_history["Date"] < prices["Date"].min()].copy()
+            first_close_diff_batch = False
+        close_diff_history = pd.concat([close_diff_history, price_tail], ignore_index=True, sort=False)
+        test_features = make_close_diff_features(close_diff_history)
+        test_features = test_features.loc[test_features["Date"].isin(prediction_dates)].copy()
+        predictions = close_diff_model.predict(test_features[CLOSE_DIFF_FEATURE_COLUMNS])
+        prediction_frame = rank_predictions(sample_prediction, predictions)
+        env.predict(prediction_frame)
+        close_diff_history = tail_by_code(close_diff_history, n=CLOSE_DIFF_HISTORY_DAYS)
+    else:
+        feature_source = pd.concat([history_tail, prices], ignore_index=True, sort=False)
+        test_features = make_features(feature_source, stock_list)
+        test_features = test_features.loc[test_features["Date"].isin(prediction_dates)].copy()
+        rolling_predictions = model.predict(test_features[FEATURE_COLUMNS])
+        simple_features = make_simple_features(prices, stock_list)
+        simple_predictions = simple_model.predict(simple_features[SIMPLE_FEATURE_COLUMNS])
+        predictions = ROLLING_WEIGHT * rolling_predictions + (1.0 - ROLLING_WEIGHT) * simple_predictions
+        prediction_frame = rank_predictions(sample_prediction, predictions)
+        env.predict(prediction_frame)
+        history_tail = tail_by_code(pd.concat([history_tail, prices], ignore_index=True, sort=False))
