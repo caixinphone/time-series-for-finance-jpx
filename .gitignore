@@ -1,0 +1,7 @@
+.DS_Store
+.venv/
+data/
+outputs/
+kaggle_kernel_pulled/
+__pycache__/
+*.pyc

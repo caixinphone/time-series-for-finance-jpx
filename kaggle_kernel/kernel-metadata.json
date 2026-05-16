@@ -1,0 +1,18 @@
+{
+  "id": "caixin030703/jpx-local-baseline-submit",
+  "title": "JPX Local Baseline Submit",
+  "code_file": "jpx_submission.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "docker_image": "gcr.io/kaggle-images/python@sha256:ddd5f01a03511c9e7c111c9acb6ecaf1becd3e6d28c24094cd9b1b4c16faf8ea",
+  "dataset_sources": [],
+  "competition_sources": [
+    "jpx-tokyo-stock-exchange-prediction"
+  ],
+  "kernel_sources": [],
+  "model_sources": []
+}
