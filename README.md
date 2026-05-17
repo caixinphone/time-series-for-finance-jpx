@@ -2,14 +2,6 @@
 
 这个项目用于完成一个真实的 Kaggle 金融时间序列竞赛闭环：下载 JPX 数据、解释任务、训练 baseline、离线验证，并生成 `submission.csv`。
 
-## 原 Kaggle 链接是什么
-
-用户给的 `TS-3: Time series for finance` 是 Konrad Banachewicz 的教学 Notebook，不是 Kaggle Competition。它使用 NIFTY-50 股票数据讲金融时间序列常见概念：
-
-- 收益率序列常见“波动聚集”，即高波动期和低波动期会成段出现。
-- ARCH/GARCH 不是直接预测价格，而是建模残差或收益率的条件方差。
-- AR-GARCH 可以把均值模型和波动率模型组合起来做预测。
-- VaR 用条件均值、条件波动率和分位数估计投资组合潜在损失。
 
 ## 本项目选择的真实竞赛
 
@@ -50,11 +42,11 @@ unzip -q -o data/jpx/jpx-tokyo-stock-exchange-prediction.zip -d data/jpx
 ## 当前最好提交
 
 - Kaggle kernel：`caixin030703/jpx-local-baseline-submit`
-- Kernel version：`16`
-- Submission ref：`52712546`
-- Public score：`0.214`
-- Private score：`0.214`
-- 主要改进：线上提交脚本切换为极简 LightGBM 排序信号，只使用调整后收盘价的一日差分 `close_diff1` 预测 `Target`，再按每日预测值生成排名。
+- Kernel version：`24`
+- Submission ref：`52720631`
+- Public score：`0.366`
+- Private score：`0.366`
+- 主要改进：将公开第 2 名 LightGBM 方案与公开第 4 名规则模型做 rank ensemble。LightGBM 使用 20/40/60 日收益率、波动率和均线偏离特征；规则模型按调整后 1 日收益反向排序并惩罚股息日。
 
 已验证过的主要线上版本：
 
@@ -62,6 +54,9 @@ unzip -q -o data/jpx/jpx-tokyo-stock-exchange-prediction.zip -d data/jpx
 - v13：多随机种子的浅层 LightGBM 差分 ensemble，`0.157 / 0.157`。
 - v14：alpha-tail LightGBM，只训练每日收益两端股票，`0.165 / 0.165`。
 - v16：单特征 `close_diff1` LightGBM，`0.214 / 0.214`。
+- v18：公开第 4 名规则模型，按 1 日收益反向排序并惩罚股息日，`0.344 / 0.344`。
+- v21：公开第 2 名 LightGBM 方案复刻，`0.356 / 0.356`。
+- v24：LightGBM + 规则模型 rank ensemble，`0.366 / 0.366`。
 
 输出文件：
 
